@@ -1,0 +1,335 @@
+#include <LiquidCrystal.h>
+#include <Adafruit_NeoPixel.h>
+
+// 4x4 keypad encoder (mm74c922n)
+#define PIN_A 3
+#define PIN_B 4
+#define PIN_C 5
+#define PIN_D 6
+#define PIN_INT 2
+
+// neopixel ws2812
+#define PIXELS 8
+#define PIN_LED 8
+
+// piezo speaker
+#define PIN_TONE 7
+#define TONE 3920
+#define DELAY 250
+
+// vfd display 
+#define PIN_RS A0 
+#define PIN_EN A1 
+#define PIN_D4 A2 
+#define PIN_D5 A3 
+#define PIN_D6 A4 
+#define PIN_D7 A5
+
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(PIXELS, PIN_LED, NEO_GRB + NEO_KHZ800);
+LiquidCrystal vfd(PIN_RS, PIN_EN, PIN_D4, PIN_D5, PIN_D6, PIN_D7);
+
+// Idea Fab Labs Light Bulb Logo 19x17
+byte top_left[8] = {
+  0b00000,
+  0b00001,
+  0b00011,
+  0b00110,
+  0b00110,
+  0b01100,
+  0b01100,
+  0b00000
+};
+
+byte top_middle[8] = {
+  0b11111,
+  0b11111,
+  0b00000,
+  0b00000,
+  0b01110,
+  0b11001,
+  0b10001,
+  0b00000
+};
+
+byte top_right[8] = {
+  0b00000,
+  0b10000,
+  0b11000,
+  0b01100,
+  0b01100,
+  0b00110,
+  0b00110,
+  0b00000
+};
+
+byte bottom_left[8] = {
+  0b01100,
+  0b01100,
+  0b01100,
+  0b01100,
+  0b00110,
+  0b00011,
+  0b00001,
+  0b00000
+};
+
+byte bottom_middle[8] = {
+  0b10001,
+  0b01010,
+  0b01110,
+  0b01110,
+  0b00000,
+  0b00000,
+  0b11111,
+  0b10000
+};
+
+byte bottom_right[8] = {
+  0b00110,
+  0b00110,
+  0b00110,
+  0b01100,
+  0b01100,
+  0b11000,
+  0b10000,
+  0b00000
+};
+
+String inputString = "";        // a String to hold incoming keypad data
+bool stringComplete = false;    // whether the string is complete
+String commandString = "";      // a String to hold incoming serial data
+bool commandComplete = false;   // whether the command string is complete
+bool scrolling = false;          // whether the display is scrolling
+bool entering = false;          // whether the user is entering code
+
+int output, key_code, press_status = 0;
+char str[16] = {'A', '3', '2', '1', 'B', '6', '5', '4', 'C', '9', '8', '7', 'D', '#', '0', '*'};
+
+void setup(){
+  //delay(500);             // wait for device to power up
+  Serial.begin(115200);       // initialize serial
+  //Serial.print("Keypad Starting");
+  
+  pinMode(PIN_D, INPUT);
+  pinMode(PIN_C, INPUT);
+  pinMode(PIN_B, INPUT);
+  pinMode(PIN_A, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIN_INT), Read_Data, RISING);
+
+  //Serial.print(".");  
+
+  vfd.begin(20, 2);                 // 20x2 character module
+  vfd.autoscroll();                 // autoscroll enabled
+  vfd.createChar(0, top_left);      // define top_left as char 0
+  vfd.createChar(1, top_middle);    // define top_middle as char 1
+  vfd.createChar(2, top_right);     // define top_right as char 2
+  vfd.createChar(3, bottom_left);   // define bottom_left as char 3
+  vfd.createChar(4, bottom_middle); // define bottom_middle as char 4
+  vfd.createChar(5, bottom_right);  // define bottom_right as char 5  
+  
+  //Serial.print(".");  
+  welcomeScreen();
+  
+  strip.begin();
+  strip.show(); // Initialize all pixels to 'off'
+  //Serial.println(".");  
+  colorWipe(strip.Color(50, 0, 50), 50); // Light Purple
+
+  //Serial.println("Keypad Ready.");
+}
+
+void loop(){
+  if(press_status) {
+    colorWipe(strip.Color(0, 255, 0), 10); // Green
+    char inChar = (char)str[output]; // get the new byte
+    if (inChar == '*') { 
+      tone(PIN_TONE, TONE + 250, DELAY);
+      inputString = ""; // clear the string
+      welcomeScreen();
+    } else if (inChar == '#') { 
+      tone(PIN_TONE, TONE - 250, DELAY);
+      stringComplete = true;
+      //return;
+    } else {
+      //colorWipe(strip.Color(0, 255, 0), 10); // Green
+      tone(PIN_TONE, TONE, DELAY);
+      inputString += inChar; // add it to the inputString
+      if(!entering)
+        entercodeScreen();
+    }
+    press_status = 0;
+    delay(50); // FIXME: no delays ... may skip serialEvent
+    colorWipe(strip.Color(50, 0, 50), 10); // Light Purple
+  }
+  
+  if(stringComplete) {
+    //vfd.clear();
+    //vfd.print(inputString.c_str());
+    Serial.println(inputString);
+    pleasewaitScreen();
+    inputString = ""; // clear the string
+    stringComplete = false;
+  }
+
+  if(commandComplete) {
+
+    if(commandString == "E") {
+       outoforderScreen();
+    }
+
+    if(commandString == "Y") {
+       grantedScreen();
+    }
+
+    if(commandString == "N") {
+       deniedScreen();
+    }
+
+    if(commandString == "*") {
+       welcomeScreen();
+    }
+    
+    commandString = ""; // clear the string
+    commandComplete = false;
+  }
+  
+  if(scrolling) {
+    vfd.scrollDisplayLeft();
+    delay(150); // FIXME: no delays ... may skip serialEvent 
+  }
+}
+
+void serialEvent() {
+  char inChar = (char)Serial.read(); // get the new byte
+  commandString = inChar; // add it to the inputString
+  commandComplete = true;
+  while (Serial.available()>0) inChar=Serial.read();
+}
+
+void Read_Data(){ 
+  output = 0;
+  output = output | digitalRead(PIN_D);
+  output = output << 1;
+  output = output | digitalRead(PIN_C);
+  output = output << 1;
+  output = output | digitalRead(PIN_B);
+  output = output << 1;
+  output = output | digitalRead(PIN_A);
+  press_status = 1;
+}
+
+void welcomeScreen() {
+  colorWipe(strip.Color(50, 0, 50), 10);
+  entering =false;  
+  vfd.clear();
+  vfd.write(byte(0)); // print top_left
+  vfd.write(byte(1)); // print top_middle
+  vfd.write(byte(2)); // print top_right
+
+  vfd.print("    Welcome to  ");
+  vfd.setCursor(0, 1);
+
+  vfd.write(byte(3)); // print bottom_left
+  vfd.write(byte(4)); // print bottom_middle
+  vfd.write(byte(5)); // print bottom_right
+  
+  vfd.print("  Idea Fab Labs  ");
+  scrolling = false;
+}
+
+void pleasewaitScreen() {
+  scrolling = false;
+  entering =false;
+  colorWipe(strip.Color(50, 50, 50), 10);
+  vfd.clear();
+  vfd.print("   Please         ");
+  vfd.setCursor(0, 1);
+  vfd.print("   Wait ...       ");
+}
+
+void entercodeScreen() {
+  scrolling = false;
+  entering =true;
+  //colorWipe(strip.Color(50, 0, 50), 10);
+  vfd.clear();
+  vfd.print("   Enter Code:     ");
+  vfd.setCursor(0, 1);
+  vfd.print("                   ");
+}
+
+void grantedScreen() {
+  scrolling = false;
+  colorWipe(strip.Color(0, 255, 0), 10);
+  vfd.clear();
+  vfd.print("   Access         ");
+  vfd.setCursor(0, 1);
+  vfd.print("  Granted         ");
+}
+
+void deniedScreen() {
+  scrolling = false;
+  colorWipe(strip.Color(255, 0, 0), 10);
+  vfd.clear();
+  vfd.print("   Access         ");
+  vfd.setCursor(0, 1);
+  vfd.print("   Denied         ");
+}
+
+void outoforderScreen() {
+  scrolling = false;
+  entering =false;
+  colorWipe(strip.Color(50, 0, 0), 10);
+  vfd.clear();
+  vfd.print("   Out Of         ");
+  vfd.setCursor(0, 1);
+  vfd.print("   Order          ");
+}
+
+// Fill the dots one after the other with a color
+void colorWipe(uint32_t c, uint8_t wait) {
+  for(uint16_t i=0; i<strip.numPixels(); i++) {
+    strip.setPixelColor(i, c);
+    strip.show();
+    delay(wait); // FIXME: no delays ... may skip serialEvent
+  }
+}
+
+void rainbow(uint8_t wait) {
+  uint16_t i, j;
+
+  for(j=0; j<256; j++) {
+    for(i=0; i<strip.numPixels(); i++) {
+      strip.setPixelColor(i, Wheel((i+j) & 255));
+    }
+    strip.show();
+    delay(wait); // FIXME: no delays ... may skip serialEvent
+  }
+}
+
+// Slightly different, this makes the rainbow equally distributed throughout
+void rainbowCycle(uint8_t wait) {
+  uint16_t i, j;
+
+  for(j=0; j<256*5; j++) { // 5 cycles of all colors on wheel
+    for(i=0; i< strip.numPixels(); i++) {
+      strip.setPixelColor(i, Wheel(((i * 256 / strip.numPixels()) + j) & 255));
+    }
+    strip.show();
+    delay(wait); // FIXME: no delays ... may skip serialEvent
+  }
+}
+
+// Input a value 0 to 255 to get a color value.
+// The colours are a transition r - g - b - back to r.
+uint32_t Wheel(byte WheelPos) {
+  WheelPos = 255 - WheelPos;
+  if(WheelPos < 85) {
+    return strip.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+  }
+  if(WheelPos < 170) {
+    WheelPos -= 85;
+    return strip.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+  }
+  WheelPos -= 170;
+  return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+}
